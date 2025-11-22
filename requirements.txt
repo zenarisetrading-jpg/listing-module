@@ -1,0 +1,10 @@
+streamlit
+pandas
+requests
+beautifulsoup4
+Pillow
+plotly
+numpy
+openai
+pdfplumber
+pytesseract
