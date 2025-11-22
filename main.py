@@ -31,7 +31,7 @@ except ImportError:
 # --- GLOBAL SETUP & BRANDING ---
 st.set_page_config(layout="wide", page_title="Zenarise Listing Module")
 
-# --- BRAND STYLING CSS ---
+# --- V21: FINAL BRAND STYLING CSS ---
 def apply_brand_styling():
     st.markdown("""
         <style>
@@ -39,6 +39,10 @@ def apply_brand_styling():
             html, body, [class*="css"], div, button, input, select, textarea, .stAlert {
                 font-family: "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif !important;
                 color: #1E1E1E !important; /* Force dark grey text generally */
+            }
+            /* V21 FIX: Force main background to light grey, overriding system dark mode */
+            .main {
+                background-color: #E6E7E8; 
             }
             /* Force inputs to have light backgrounds and dark text */
             .stTextInput input, .stTextArea textarea, .stNumberInput input {
