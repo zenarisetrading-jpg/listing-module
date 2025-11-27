@@ -1,9 +1,11 @@
 # main.py
 """
 S2C — Super App: Integrated Listing Auditor & Creator
-Version: V20 (Refinement Preservation Fix + Final Stable)
-Logic: V13 base.
-Fix: Ensures A+ Modules are preserved during the 'Refine Text' step by updating the SYSTEM_REFINE_PROMPT.
+Version: V22 (Safety Hardening + Scraper Fix)
+Logic: V13 base + V20 Refinement + V21 Safety Filters + V22 Input Sanitization.
+Fixes: 
+1. Scraper URL connection error resolved.
+2. Banned words are now stripped from the 'target keywords' list before AI generation.
 """
 
 import streamlit as st
@@ -31,7 +33,7 @@ except ImportError:
 # --- GLOBAL SETUP & BRANDING ---
 st.set_page_config(layout="wide", page_title="Zenarise Listing Module")
 
-# --- V21: FINAL BRAND STYLING CSS ---
+# --- BRAND STYLING CSS ---
 def apply_brand_styling():
     st.markdown("""
         <style>
@@ -39,10 +41,6 @@ def apply_brand_styling():
             html, body, [class*="css"], div, button, input, select, textarea, .stAlert {
                 font-family: "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif !important;
                 color: #1E1E1E !important; /* Force dark grey text generally */
-            }
-            /* V21 FIX: Force main background to light grey, overriding system dark mode */
-            .main {
-                background-color: #E6E7E8; 
             }
             /* Force inputs to have light backgrounds and dark text */
             .stTextInput input, .stTextArea textarea, .stNumberInput input {
@@ -221,7 +219,7 @@ def load_csv_keywords(uploaded_file):
     return []
 
 # ============================================================
-# 2. LLM PROMPTS & WRAPPERS (V20: AGGRESSIVE PROMPT & REFINEMENT FIX)
+# 2. LLM PROMPTS & WRAPPERS (V21: SAFETY PATCH)
 # ============================================================
 SYSTEM_BH_PROMPT = """
 You are a senior product strategist. Input: canonical_specs (JSON list), keywords (list).
@@ -231,16 +229,19 @@ Do NOT invent numeric measurements. Use only provided specs/evidence.
 Do not include markdown formatting like ```json at the start or end.
 """
 
-# V20 Change: Stronger, imperative prompt to force better results and address low score gain.
+# V21 Update: STRICT SAFETY CHECK added to Rule 2
 BASE_LISTING_PROMPT = """
 You are an elite Amazon Listing Optimizer for brand 'S2C'.
 Your task is to transform an underperforming listing into a category leader.
 
 CRITICAL INSTRUCTIONS:
 1.  **RESOLVE AUDIT FAILINGS:** You must aggressively fix every point listed in `audit_report_to_address.opportunities_to_fix`.
-2.  **INTEGRATE FACTS:** You MUST include all `factual_claims_to_include` within the bullet points. Weave them naturally into benefit-driven statements. Do not just list them.
-3.  **MAXIMIZE KEYWORDS:** Seamlessly integrate the provided `keywords` into the Title, Bullets, and Description for maximum relevance without keyword stuffing. Priority goes to high-volume keywords not present in the original listing.
-4.  **FOLLOW BLUEPRINT:** Use the `benefit_hierarchy` as the structural backbone for your content.
+2.  **STRICT SAFETY CHECK:** You are FORBIDDEN from using any words listed in `constraints.forbidden_words`. 
+    - If the input implies "prevent" or "treat", you MUST substitute them with safe terms like "help reduce", "support", "maintain", "promote", or "minimize".
+    - Do NOT make disease claims (e.g., "cures insomnia"). Use structure/function claims (e.g., "promotes restful sleep").
+3.  **INTEGRATE FACTS:** You MUST include all `factual_claims_to_include` within the bullet points. Weave them naturally into benefit-driven statements. Do not just list them.
+4.  **MAXIMIZE KEYWORDS:** Seamlessly integrate the provided `keywords` into the Title, Bullets, and Description for maximum relevance without keyword stuffing. Priority goes to high-volume keywords not present in the original listing.
+5.  **FOLLOW BLUEPRINT:** Use the `benefit_hierarchy` as the structural backbone for your content.
 
 Inputs provided: `benefit_hierarchy`, `audit_report_to_address`, `factual_claims_to_include`, `keywords`, `constraints`.
 
@@ -262,7 +263,6 @@ Every single module object MUST have this exact structure to act as a design bri
 }
 """
 
-# V20 Fix: Aplus_modules added to the required output keys.
 SYSTEM_REFINE_PROMPT = """
 You are an expert Amazon copywriter editor.
 Input: current_listing (JSON), user_instruction (string).
@@ -305,40 +305,97 @@ def nav_to(mode):
     st.rerun()
 
 # ============================================================
-# 4. MODULE: AUDITOR (EXACT V13 LOGIC & CLASSES)
+# 4. MODULE: AUDITOR (V21: UPDATED ROBUST SCRAPER)
 # ============================================================
+
 class RobustScraper:
-    def _get_headers(self):
-        user_agents = [
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15"
-        ]
-        return {'User-Agent': random.choice(user_agents), 'Accept-Language': 'en-US,en;q=0.9'}
+    def __init__(self):
+        # Your ScraperAPI Key
+        self.api_key = "25a6a24456463da81ea1ff0d5838924c" 
+        # FIX APPLIED: Removed markdown brackets to fix connection error
+        self.base_url = "http://api.scraperapi.com"
 
     def scrape_listing(self, url):
         if "amazon" not in url: return None, "Invalid Amazon URL."
+        
+        # --- 1. Dynamic Region & Forced English Logic ---
+        # We default to US
+        country_code = 'us'
+        
+        # If UAE, use UAE Proxy + Force English
+        if ".ae" in url:
+            country_code = 'ae'
+            if "language=" not in url:
+                separator = "&" if "?" in url else "?"
+                url += f"{separator}language=en_AE"
+                
+        # If KSA, use KSA Proxy + Force English (en_AE works for KSA too)
+        elif ".sa" in url:
+            country_code = 'sa'
+            if "language=" not in url:
+                separator = "&" if "?" in url else "?"
+                url += f"{separator}language=en_AE"
+
+        # --- 2. Construct Payload ---
+        payload = {
+            'api_key': self.api_key,
+            'url': url,
+            'country_code': country_code, # 'ae', 'sa', or 'us'
+            'device_type': 'desktop',
+            # 'render': 'true' # Uncomment if you see empty results (costs 5 credits)
+        }
+
         try:
-            response = requests.get(url, headers=self._get_headers(), timeout=15)
-            if response.status_code != 200: return None, f"Failed to connect (Status: {response.status_code})"
+            # 3. Send Request (60s timeout for slower geo-proxies)
+            response = requests.get(self.base_url, params=payload, timeout=60)
+            
+            if response.status_code != 200:
+                return None, f"ScraperAPI Failed (Status: {response.status_code}). Msg: {response.text}"
+            
+            # 4. Parse Content
             soup = BeautifulSoup(response.content, 'html.parser')
             
-            # V13 Logic
-            title = soup.find(id="productTitle").get_text().strip() if soup.find(id="productTitle") else ""
-            bullets = [li.get_text().strip() for li in soup.select("#feature-bullets li") if li.get_text().strip()]
-            if not bullets: bullets = [li.get_text().strip() for li in soup.select(".a-unordered-list.a-vertical.a-spacing-mini li") if li.get_text().strip()]
+            # --- Parsing Logic ---
+            title_node = soup.find(id="productTitle")
+            title = title_node.get_text().strip() if title_node else ""
             
+            # Robust Bullet Extraction
+            bullets = []
+            # ScraperAPI returns clean HTML, so standard selectors usually work
+            for li in soup.select("#feature-bullets li"):
+                txt = li.get_text().strip()
+                if txt and not txt.lower().startswith("make sure"): 
+                    bullets.append(txt)
+            
+            # Fallback for different layouts
+            if not bullets:
+                bullets = [li.get_text().strip() for li in soup.select(".a-unordered-list.a-vertical.a-spacing-mini li") if li.get_text().strip()]
+            
+            # Description Extraction
             desc_container = soup.find(id="productDescription")
             desc = desc_container.get_text(separator="\n").strip() if desc_container else ""
             
+            # Image Counting
             img_count = len(soup.select("#altImages li.item")) + len(soup.select(".regularAltImageViewLayout li"))
+            
+            # SAFETY NET: Default to 7 images if title exists but images are hidden/lazy-loaded
+            if img_count == 0 and title: 
+                img_count = 7 
+            
             video_count = len(soup.select(".video-container, #video-block, .a-video-wrapper"))
             video_present = 1 if video_count > 0 else 0
 
             img_counts = (max(1, img_count-3), 1, 1, video_present) if img_count > 3 else (img_count, 0, 0, video_present)
             
+            if not title:
+                return None, f"Connected to Amazon {country_code.upper()} (English), but got empty data."
+                
             return {"title": title, "bullets": bullets, "description": desc, "img_counts": img_counts}, None
-        except Exception as e: return None, f"Scraping error: {str(e)}"
 
+        except Exception as e:
+            return None, f"Connection Error: {str(e)}"
+
+# Re-initialize the scraper instance
 scraper = RobustScraper()
 
 class HybridAuditor:
@@ -380,7 +437,8 @@ class HybridAuditor:
         full_text = f"{title} {' '.join(bullets)} {description}".lower()
         factual_claims = extract_factual_claims(full_text)
         
-        banned_words = ["cure", "treat", "prevent", "diagnose", "best seller", "guarantee"]
+        # Expanded list of compliance triggers
+        banned_words = ["cure", "treat", "prevent", "diagnose", "best seller", "guarantee", "covid", "virus", "bacteria"]
         found_banned = [w for w in banned_words if f" {w} " in full_text]
         compliance_score = 0.2 if found_banned else 1.0
         
@@ -503,6 +561,7 @@ def render_audit_module():
             result = auditor.audit_listing(curr_title, bullets_list, curr_desc, target_kws, img_counts)
             st.session_state["audit_result"] = result
             
+            # V21 Update: Persist banned words to session state
             st.session_state["audit_data"] = {
                 "raw_title": curr_title,
                 "raw_bullets": bullets_list,
@@ -513,6 +572,7 @@ def render_audit_module():
                 "audit_opportunities": result["details"]["opportunities"],
                 "audit_strengths": result["details"]["strengths"],
                 "factual_claims": result["details"]["factual_claims"],
+                "banned_words_found": result["details"]["banned"], # <--- SAVED HERE
                 "has_aplus": has_aplus
             }
 
@@ -638,10 +698,15 @@ def render_creator_module():
         st.header("Step 3: Final Listing & A+ Design Briefs")
         
         facts_to_include = audit_data.get("factual_claims", [])
+        banned_list = audit_data.get("banned_words_found", [])
         has_aplus = audit_data.get("has_aplus", False)
 
         if facts_to_include:
             st.info(f"ℹ️ AI will include mandatory facts: {', '.join(facts_to_include)}")
+        
+        # V21 Update: Notify user about strict filters
+        if banned_list:
+            st.warning(f"⛔ STRICT SAFETY FILTER ACTIVE: The following words will be forcibly removed/replaced: {', '.join(banned_list)}")
         
         task_desc = "Generate optimized Amazon listing text."
         if not has_aplus:
@@ -654,6 +719,17 @@ def render_creator_module():
              with st.spinner(f"AI is optimizing content ({'including A+ briefs' if not has_aplus else 'text only'})... Wait ~60-90s..."):
                  keywords = audit_data.get("keywords", [])
                  
+                 # FIX APPLIED: HARDENING KEYWORD LIST
+                 # Remove banned words from the target keyword list so the AI isn't tempted to integrate them.
+                 if banned_list:
+                     original_kw_count = len(keywords)
+                     keywords = [
+                         k for k in keywords 
+                         if not any(b.lower() in k.lower() for b in banned_list)
+                     ]
+                     if len(keywords) < original_kw_count:
+                         st.toast(f"⚠️ Filtered {original_kw_count - len(keywords)} unsafe keywords before sending to AI.", icon="🛡️")
+
                  # V20 Logic Fix: Using the new AGGRESSIVE prompt
                  final_system_prompt = BASE_LISTING_PROMPT
                  if not has_aplus:
@@ -674,7 +750,8 @@ def render_creator_module():
                          "title_length_range": "180-200 characters",
                          "title_kw_count": "Top 3-5 essential keywords",
                          "bullet_style": "Narrative, benefit-driven paragraphs with facts.",
-                         "star_feature_requirement": "Ensure one bullet highlights a 'star feature'."
+                         "star_feature_requirement": "Ensure one bullet highlights a 'star feature'.",
+                         "forbidden_words": banned_list # V21: Passed as explicit constraint
                      }
                  })
                  listing = call_llm_json(client, final_system_prompt, user_content, temp=0.3, model="gpt-4o")
